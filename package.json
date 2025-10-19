@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "fetch-rwgps": "ts-node src/rwgpsFetcher.ts"
+    "fetch-rwgps": "ts-node src/rwgpsFetcher.ts",
+    "preprocess": "node src/preprocess.ts"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
@@ -17,8 +18,12 @@
     "vite": "^7.1.7"
   },
   "dependencies": {
+    "@tmcw/togeojson": "^7.1.2",
+    "@turf/bbox": "^7.2.0",
+    "@xmldom/xmldom": "^0.8.11",
     "better-sqlite3": "^12.4.1",
     "dotenv": "^17.2.3",
-    "maplibre-gl": "^5.9.0"
+    "maplibre-gl": "^5.9.0",
+    "simplify-js": "^1.2.4"
   }
 }

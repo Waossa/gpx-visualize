@@ -3,12 +3,11 @@ import * as fs from "fs";
 import * as path from "path";
 import dotenv from "dotenv";
 import {
-  getExistingRideIds,
-  insertRideRow,
-  setMeta,
+  Db
 } from "./db.ts";
 
 dotenv.config(); // loads .env → process.env
+let database = new Db;
 
 // -------------------------------------------------------------------
 // 1️⃣ Configuration & constants
@@ -121,7 +120,7 @@ export async function fetchActivities(): Promise<
   { id: number; name: string; departed_at: string }[]
 > {
   // 1️⃣ Load the set of IDs we already have locally.
-  const alreadyHave = getExistingRideIds(); // Set<string>
+  const alreadyHave = database.getExistingRideIds(); // Set<string>
 
   // 2️⃣ Prepare to collect the *new* rides.
   const newRides: { id: number; name: string; departed_at: string }[] = [];
@@ -235,7 +234,7 @@ export async function fetchRideByID(rideId: number): Promise<any> {
     const activities = await fetchActivities();
 
     // Build a Set of IDs we already have locally (from the SQLite manifest)
-    const existingIds = getExistingRideIds();
+    const existingIds = database.getExistingRideIds();
 
     // Filter out anything we already possess
     const newActivities = activities.filter(act => !existingIds.has(String(act.id)));
@@ -256,14 +255,15 @@ export async function fetchRideByID(rideId: number): Promise<any> {
         // You can later run your preprocessing script which will replace
         // the placeholder values with the real bbox / simplified files.
         // ----------------------------------------------------------------
-        const placeholderBBox = "0,0,0,0"; // dummy – will be overwritten later
-        insertRideRow(
-          String(act.id),
-          placeholderBBox,
-          `processed/${act.id}_full.geojson`,
-          `processed/${act.id}_medium.geojson`,
-          `processed/${act.id}_coarse.geojson`
-        );
+// TODO: convert to RideMeta or something. Or maybe remove all DB stuff from this class, as the original ride files are handled as individual files on disk, not db.
+//        const placeholderBBox = "0,0,0,0"; // dummy – will be overwritten later
+//        database.insertRideRow(
+//          String(act.id),
+//          placeholderBBox,
+//          `processed/${act.id}_full.geojson`,
+//          `processed/${act.id}_medium.geojson`,
+//          `processed/${act.id}_coarse.geojson`
+//        );
       }
     }
 
@@ -271,7 +271,7 @@ export async function fetchRideByID(rideId: number): Promise<any> {
     // 7️⃣ Persist the “last run” timestamp (now) for the next execution.
     // --------------------------------------------------------------------
     const nowIso = new Date().toISOString();
-    setMeta("last_run_ts", nowIso);
+    database.setMeta("last_run_ts", nowIso);
     console.log(`🕒 Saved last‑run timestamp: ${nowIso}`);
 
     console.log("🎉 Done!");
