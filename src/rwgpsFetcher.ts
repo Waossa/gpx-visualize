@@ -53,11 +53,18 @@ async function authFetch(url: string, attempt = 0): Promise<Response> {
     throw new Error("RWGPS_TOKEN missing – add it to your .env file");
   }
 
-  const headers = new Headers();
-  headers.set("Authorization", `Bearer ${token}`);
-  headers.set("Accept", "application/json");
+  const urlObj = new URL(url);
+  urlObj.searchParams.append("auth_token", token);
+  urlObj.searchParams.append("api_key", "testkey1");
+  urlObj.searchParams.append("version", "2");
 
-  const resp = await fetch(url, { method: "GET", headers });
+  const resp = await fetch(urlObj.toString(), {
+    method: "GET",
+    headers: { 
+        Accept: "application/json",
+        Cookie: "_rwgps_3_session=z9MTONzQFldQRA41NVNvWuAO4GPogOirKpkbl3ZblaIV1FFf9plhaa0Tr%2B40BxP7v1OqOT%2B5dMFOx9JeG%2F0z5OYlbrrJXqtjuVv84NqZzp6jfJb5xZfMoEA20GvP8kmIXiRrTjUDjH8kATeDHx99aDOCxuWY1JjbsasdAPqS0llm1TxJrv%2FJeAvK%2BMWPY2wYxg7A8AFb59kJy0W3sNCLgh663m107O%2BhRlyEAH%2FZVEhsPyM4PWUJNsXRVJPVoB2jdvz%2FMqwjuD0hYrVKysu57nrjxkb%2BTcPu8FdRKMi4nGSxRBiA0vZbi0VaTVJYS1q2hjIAzEIPZPXX2H7FpVcah2mHm4cvfvOeBVOTt4JQKvqr14cjXd3DVNvlWaGvIjvFR6%2BKrPCKdLYsqw%3D%3D--NWlYTlH5QIABXLYi--0Ezda1QMvaSSlkROA9%2FFbA%3D%3D"
+     },
+  });
 
   // -----------------------------------------------------------------
   // 1️⃣ Success – any 2xx status is fine, return the response.
@@ -111,13 +118,13 @@ async function authFetch(url: string, attempt = 0): Promise<Response> {
  * prefer streaming.
  */
 export async function fetchActivities(): Promise<
-  { id: number; name: string; start_time: string }[]
+  { id: number; name: string; departed_at: string }[]
 > {
   // 1️⃣ Load the set of IDs we already have locally.
   const alreadyHave = getExistingRideIds(); // Set<string>
 
   // 2️⃣ Prepare to collect the *new* rides.
-  const newRides: { id: number; name: string; start_time: string }[] = [];
+  const newRides: { id: number; name: string; departed_at: string }[] = [];
 
   // 3️⃣ Pagination loop – keep requesting pages until we get fewer
   //    results than the page size (that means we reached the end).
@@ -134,18 +141,20 @@ export async function fetchActivities(): Promise<
         `Failed to fetch trips (status ${resp.status}) – aborting`
       );
     }
-
     const payload = (await resp.json()) as {
-      trips: Array<{ id: number; name: string; start_time: string }>;
-      total: number;
-      offset: number;
-      limit: number;
+      results: Array<{
+        id: number;
+        name: string;
+        departed_at: string; // ISO‑8601 timestamp (when the ride started)
+        // …all the other fields are present but we ignore them here…
+      }>;
+      results_count: number;
     };
 
-    const pageTrips = payload.trips ?? [];
+    const pageRides = payload.results ?? [];
 
     // 4️⃣ Filter out rides we already have.
-    for (const trip of pageTrips) {
+    for (const trip of pageRides) {
       if (!alreadyHave.has(String(trip.id))) {
         newRides.push(trip);
       }
@@ -153,7 +162,7 @@ export async function fetchActivities(): Promise<
 
     // 5️⃣ Decide whether we need another request.
     // If the API returned fewer rows than the limit, we are on the last page.
-    if (pageTrips.length < PAGE_LIMIT) {
+    if (pageRides.length < PAGE_LIMIT) {
       morePages = false;
     } else {
       // Otherwise bump the offset and continue.
