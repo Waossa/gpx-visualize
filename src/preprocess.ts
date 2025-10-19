@@ -17,6 +17,199 @@ import { promises as fs } from "fs";
 import * as path from "path";
 import { Db, type RideRecord } from "./db.ts";
 
+/* --------------------------------------------------------------
+ *  Geometry helpers – Douglas‑Peucker simplification
+ * -------------------------------------------------------------- */
+import simplify from "simplify-js";
+
+/**
+ * Convert the `track_points` array (which contains objects like
+ * `{ x: lon, y: lat }`) into a simple `[lon, lat][]` coordinate list.
+ *
+ * If the ride does not contain `track_points` we return `null`
+ * – the caller can decide to skip that ride or fetch the GPX later.
+ */
+function extractCoordinates(trip: any): [number, number][] | null {
+  if (!Array.isArray(trip.track_points) || trip.track_points.length === 0) {
+    return null;
+  }
+  // The API already gives us lon/lat in the `x`/`y` fields.
+  return trip.track_points.map((pt: any) => [pt.x, pt.y] as [number, number]);
+}
+
+/**
+ * Write a single GeoJSON `FeatureCollection` that contains **one**
+ * `LineString` feature. Returns the absolute path of the written file.
+ */
+async function writeGeoJSON(
+  rideId: string,
+  coords: [number, number][],
+  suffix: "full" | "medium" | "coarse",
+  outDir: string
+): Promise<string> {
+  const feature = {
+    type: "Feature",
+    properties: {}, // you could add name/date here if you like
+    geometry: {
+      type: "LineString",
+      coordinates: coords,
+    },
+  };
+
+  const fc = {
+    type: "FeatureCollection",
+    features: [feature],
+  };
+
+  const fileName = `${rideId}_${suffix}.geojson`;
+  const filePath = path.join(outDir, fileName);
+  await fs.writeFile(filePath, JSON.stringify(fc, null, 2), "utf8");
+  return filePath;
+}
+
+function cleanCoordinates(raw: any[]): [number, number][] {
+  const cleaned: [number, number][] = [];
+
+  for (const pt of raw) {
+    let lon: number | undefined;
+    let lat: number | undefined;
+
+    // -------------------------------------------------
+    // Detect the shape we received
+    // -------------------------------------------------
+    if (Array.isArray(pt) && pt.length >= 2) {
+      // Pair form: [lon, lat]
+      lon = Number(pt[0]);
+      lat = Number(pt[1]);
+    } else if (pt && typeof pt === "object") {
+      // Object form: {x:…, y:…}
+      lon = Number(pt.x);
+      lat = Number(pt.y);
+    } else {
+      // Anything else – skip
+      continue;
+    }
+
+    // -------------------------------------------------
+    // Throw away NaN / null / undefined values
+    // -------------------------------------------------
+    if (Number.isNaN(lon) || Number.isNaN(lat)) continue;
+
+    // -------------------------------------------------
+    // Skip exact duplicates of the previous point
+    // -------------------------------------------------
+    const last = cleaned[cleaned.length - 1];
+    if (last && last[0] === lon && last[1] === lat) continue;
+
+    cleaned.push([lon, lat]);
+  }
+
+  return cleaned;
+}
+/**
+ * Compute a *dynamic* tolerance (in degrees) that scales with the
+ * geographic spread of the track. This prevents the “two‑point” collapse
+ * for short tracks.
+ *
+ *   - `targetMeters` is the desired simplification resolution.
+ *   - We approximate 1° ≈ 111 km at the equator → 0.001° ≈ 111 m.
+ *   - For higher latitudes we shrink the tolerance proportionally.
+ */
+function toleranceForResolution(
+  coords: [number, number][],
+  targetMeters: number
+): number {
+  if (coords.length === 0) return 0;
+
+  // Compute the bounding box of the track
+  let minLon = Infinity,
+    maxLon = -Infinity,
+    minLat = Infinity,
+    maxLat = -Infinity;
+  for (const [lon, lat] of coords) {
+    if (lon < minLon) minLon = lon;
+    if (lon > maxLon) maxLon = lon;
+    if (lat < minLat) minLat = lat;
+    if (lat > maxLat) maxLat = lat;
+  }
+
+  // Approximate degree‑to‑meter conversion at the track’s centroid latitude
+  const centerLat = (minLat + maxLat) / 2;
+  const metersPerDegreeLat = 111_132; // fairly constant
+  const metersPerDegreeLon = 111_320 * Math.cos((centerLat * Math.PI) / 180);
+
+  // Choose the smaller conversion factor (worst‑case) to stay safe
+  const metersPerDegree = Math.min(metersPerDegreeLat, metersPerDegreeLon);
+
+  // Convert target meters → degrees
+  const toleranceDeg = targetMeters / metersPerDegree;
+
+  // Clamp to a reasonable upper bound (we never want > 0.01° ≈ 1 km)
+  return Math.min(toleranceDeg, 0.01);
+}
+
+/**
+ * Run RDP safely. If the result would contain ≤ 2 points we return the
+ * original coordinate list (so the map always has a usable line).
+ */
+function safeSimplify(
+  coords: [number, number][],
+  toleranceDeg: number
+): [number, number][] {
+  if (coords.length <= 2) return coords; // nothing to simplify
+
+  // Convert to the shape simplify‑js expects
+  const points = coords.map(([lon, lat]) => ({ x: lon, y: lat }));
+  const simplified = simplify(points, toleranceDeg, false);
+  const result = simplified.map(p => [p.x, p.y] as [number, number]);
+
+  // Guard against pathological two‑point output
+  return result.length > 2 ? result : coords;
+}
+
+/* --------------------------------------------------------------
+ *  Generate the three resolution GeoJSON files
+ * -------------------------------------------------------------- */
+async function generateResolutionFiles(
+  rideId: string,
+  trip: any,
+  outDir: string
+): Promise<{
+  fullPath: string;
+  mediumPath: string;
+  coarsePath: string;
+}> {
+  // 1️⃣ Extract & clean raw coordinates
+  const rawCoords = extractCoordinates(trip); // returns raw `track_points` array
+  if (!rawCoords) {
+    // No geometry – return empty placeholders (front‑end will get 404)
+    return { fullPath: "", mediumPath: "", coarsePath: "" };
+  }
+  const cleaned = cleanCoordinates(rawCoords);
+  if (cleaned.length === 0) {
+    return { fullPath: "", mediumPath: "", coarsePath: "" };
+  }
+
+
+  // 2️⃣ Full resolution – no simplification
+  const fullPath = await writeGeoJSON(rideId, cleaned, "full", outDir);
+
+  // 3️⃣ Medium resolution (~10 m)
+  const tolMedium = toleranceForResolution(cleaned, 10); // 10 m target
+  const mediumCoords = safeSimplify(cleaned, tolMedium);
+  const mediumPath = await writeGeoJSON(rideId, mediumCoords, "medium", outDir);
+
+  // 4️⃣ Coarse resolution (~100 m)
+  const tolCoarse = toleranceForResolution(cleaned, 100); // 100 m target
+  const coarseCoords = safeSimplify(cleaned, tolCoarse);
+  const coarsePath = await writeGeoJSON(rideId, coarseCoords, "coarse", outDir);
+
+  return {
+    fullPath: path.relative(process.cwd(), fullPath),
+    mediumPath: path.relative(process.cwd(), mediumPath),
+    coarsePath: path.relative(process.cwd(), coarsePath),
+  };
+}
 /* -----------------------------------------------------------------
  *  Configuration
  * ----------------------------------------------------------------- */
@@ -83,6 +276,7 @@ async function main(): Promise<void> {
   // -------------------------------------------------------------
   for (const filePath of jsonFiles) {
     try {
+      
       const raw = await fs.readFile(filePath, "utf8");
       const parsed = JSON.parse(raw) as { type: string; trip: any };
 
@@ -93,21 +287,35 @@ async function main(): Promise<void> {
 
       const trip = parsed.trip;
 
+      // Inside your processing loop, after you have `trip` parsed:
+      const rideId = String(trip.id);
+      
       // -----------------------------------------------------------------
-      // Assemble the RideRecord that matches our DB schema
+      // 1️⃣ Generate the three GeoJSON files (full / medium / coarse)
+      // -----------------------------------------------------------------
+      const processedDir = path.resolve("processed"); // <-- make sure this folder exists
+      await fs.mkdir(processedDir, { recursive: true });
+      
+      const { fullPath, mediumPath, coarsePath } = await generateResolutionFiles(
+        rideId,
+        trip,
+        processedDir
+      );
+      
+      // -----------------------------------------------------------------
+      // 2️⃣ Build the RideRecord (including the newly‑generated paths)
       // -----------------------------------------------------------------
       const record: RideRecord = {
-        id: String(trip.id),
-
+        id: rideId,
+      
         // Bounding box (always stored)
         bbox: computeBboxFromTrip(trip),
-
-        // Paths to the three resolution GeoJSON files – leave empty for now.
-        // You can later fill them after the geometry‑simplification step.
-        path_full: "",
-        path_medium: "",
-        path_coarse: "",
-
+      
+        // Paths to the three resolution GeoJSON files (now real!)
+        path_full: fullPath,      // e.g. "processed/331424522_full.geojson"
+        path_medium: mediumPath,
+        path_coarse: coarsePath,
+      
         // ---------- Filter‑able fields ----------
         departed_at: trip.departed_at,                     // ISO‑8601 string
         distance_km: Number((trip.distance / 1000).toFixed(2)), // meters → km
@@ -115,12 +323,12 @@ async function main(): Promise<void> {
         elevation_gain_m: Number(trip.metrics.ele_gain.toFixed(2)),
         tags: JSON.stringify(trip.tag_names ?? []),        // store as JSON string
       };
-
+      
       // -----------------------------------------------------------------
-      // Upsert into SQLite
+      // 3️⃣ Upsert into SQLite
       // -----------------------------------------------------------------
       db.insertRideRow(record);
-      console.log(`✅ Processed ride ${record.id}`);
+      console.log(`✅ Processed ride ${rideId}`);
     } catch (err) {
       console.error(`❌ Error processing ${path.basename(filePath)}:`, err);
     }
