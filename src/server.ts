@@ -73,6 +73,9 @@ function buildWhereClause(q: any): { sql: string; params: any[] } {
   if (q.minDistance) {
     clauses.push(`distance_km >= ?`);
     params.push(Number(q.minDistance));
+  } else {
+    clauses.push(`distance_km >= ?`);
+    params.push(Number(35));
   }
   if (q.maxDistance) {
     clauses.push(`distance_km <= ?`);
@@ -132,8 +135,7 @@ app.get("/api/rides", async (req: Request, res: Response) => {
       path_coarse
     FROM rides
     ${sql}
-    ORDER BY departed_at DESC
-    LIMIT 455;   -- protect against runaway results, TODO: remove this limit
+    ORDER BY departed_at DESC;
   `;
 
   const rows = db["db"].prepare(query).all(...params) as any[];
