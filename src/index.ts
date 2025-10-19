@@ -1,8 +1,8 @@
 // src/index.ts
 import { createMap } from "./mapInit";
-import { loadManifest, bboxIntersects } from "./dataLoader";
+import { loadRides, bboxIntersects } from "./dataLoader";
 import { addRide, removeRide, refreshRideResolution } from "./trackLayer";
-import type { RideMeta } from "./types";
+import type { BoundingBox, RideMeta } from "./types";
 import type { RideFilter } from "./filterTypes";
 import { rideMatchesFilter } from "./filterUtil";
 
@@ -32,9 +32,18 @@ function computeVisibleRides(): Set<string> {
 
   const visible = new Set<string>();
   for (const ride of state.rides) {
-    if (bboxIntersects(ride.bbox, viewport)) {
+    // todo: remove
+//    const intersect = bboxIntersects(ride.bbox, viewport)
+//    console.log(`comparing viewport long/lat to rides bounding box: ${ride.bbox}`)
+//    console.log(`minlat: ${viewport.minLat} to ${ride.bbox.minLat}`)
+//    console.log(`minlon: ${viewport.minLon} to ${ride.bbox.minLon}`)
+//    console.log(`maxlat: ${viewport.maxLat} to ${ride.bbox.maxLat}`)
+//    console.log(`maxlon: ${viewport.maxLon} to ${ride.bbox.maxLon}`)
+//    console.log(`intersects: ${intersect}`)
+//    console.log(`viewport: ${viewport.maxLat}, ${viewport.maxLon}, ${viewport.minLat}, ${viewport.minLon}, intersects with ${ride.bbox as BoundingBox}: ${intersect}`)
+//    if (bboxIntersects(ride.bbox, viewport) || true) {
       visible.add(ride.id);
-    }
+//    }
   }
   return visible;
 }
@@ -70,13 +79,14 @@ function syncLayers(): void {
       .filter(r => viewportVisible.has(r.id) && rideMatchesFilter(r, currentFilter))
       .map(r => r.id)
   );
+  console.log("number of visible rides:" + state.visible.size + " / " + state.rides.length); 
 }
 
 /* ------------------------------------------------------------------ */
 /* Entry point – same as before, just calls syncLayers() after load    */
 async function main(): Promise<void> {
   const map = createMap("map");          // <- map container id
-  const rides = await loadManifest();    // reads public/manifest.json
+  const rides = await loadRides();    // reads public/manifest.json
 
   state = {
     map,

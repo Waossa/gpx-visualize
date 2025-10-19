@@ -24,7 +24,7 @@ export interface RideMeta {
   bbox: BoundingBox;
 
   /** URLs (relative to the web root) of the three resolution files */
-  paths: {
+  urls: {
     /** Full‑detail GeoJSON – ~meter‑level, used at high zoom (≥ 15) */
     full: string;
     /** Medium‑detail GeoJSON – ~10 m tolerance, used at mid‑zoom (12 – 14) */
