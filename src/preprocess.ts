@@ -200,7 +200,7 @@ async function generateResolutionFiles(
   const mediumPath = await writeGeoJSON(rideId, mediumCoords, "medium", outDir);
 
   // 4️⃣ Coarse resolution (~100 m)
-  const tolCoarse = toleranceForResolution(cleaned, 100); // 100 m target
+  const tolCoarse = toleranceForResolution(cleaned, 1000); // 100 m target
   const coarseCoords = safeSimplify(cleaned, tolCoarse);
   const coarsePath = await writeGeoJSON(rideId, coarseCoords, "coarse", outDir);
 
